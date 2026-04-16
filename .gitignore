@@ -11,3 +11,24 @@ env/
 models/*.joblib
 models/*.pkl
 *.log
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/public/cesium/
+
+# Node
+node_modules/
+.next/
+out/
+build/
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Vercel
+.vercel

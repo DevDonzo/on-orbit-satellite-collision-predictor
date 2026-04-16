@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  @apply bg-cosmic-950 text-slate-100 antialiased;
+}
+
+.mission-backdrop {
+  background: radial-gradient(circle at 12% 8%, rgba(126, 162, 255, 0.22), transparent 36%),
+    radial-gradient(circle at 88% 6%, rgba(53, 242, 209, 0.17), transparent 28%),
+    linear-gradient(150deg, #040914 0%, #0a1225 46%, #111d3a 100%);
+}
