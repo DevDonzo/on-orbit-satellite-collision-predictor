@@ -13,25 +13,28 @@ export function useSimulationPolling() {
 
   const telemetryQuery = useQuery({
     queryKey: ["simulation", "telemetry"],
-    queryFn: fetchSatellites,
-    refetchInterval: 12_000
+    queryFn: async () => {
+      const startedAt = performance.now();
+      const satellites = await fetchSatellites();
+      setMetrics({ apiLatencyMs: Math.max(0, Math.round(performance.now() - startedAt)) });
+      return satellites;
+    },
+    refetchInterval: 5_000,
+    staleTime: 2_000
   });
 
   const collisionQuery = useQuery({
     queryKey: ["simulation", "collisions"],
     queryFn: fetchCollisionEvents,
-    refetchInterval: 10_000
+    refetchInterval: 7_000,
+    staleTime: 2_000
   });
 
   useEffect(() => {
-    const startedAt = performance.now();
     if (telemetryQuery.data) {
       upsertSatellites(telemetryQuery.data);
-      setMetrics({
-        apiLatencyMs: Math.max(0, Math.round(performance.now() - startedAt))
-      });
     }
-  }, [telemetryQuery.data, upsertSatellites, setMetrics]);
+  }, [telemetryQuery.data, upsertSatellites]);
 
   useEffect(() => {
     if (collisionQuery.data) {

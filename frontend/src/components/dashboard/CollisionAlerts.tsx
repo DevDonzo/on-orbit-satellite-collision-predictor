@@ -18,7 +18,7 @@ const riskOrder: Record<RiskBand, number> = {
 function sortEventsDescending(left: CollisionRisk, right: CollisionRisk) {
   const byRisk = riskOrder[right.riskBand] - riskOrder[left.riskBand];
   if (byRisk !== 0) return byRisk;
-  return right.probability - left.probability;
+  return left.missDistanceKm - right.missDistanceKm;
 }
 
 export function CollisionAlerts() {
@@ -29,6 +29,7 @@ export function CollisionAlerts() {
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return collisionEvents
+      .filter((event) => event.riskBand !== "low")
       .filter((event) =>
         normalized.length === 0
           ? true
@@ -69,7 +70,7 @@ export function CollisionAlerts() {
                   <Badge variant={event.riskBand}>{event.riskBand}</Badge>
                 </div>
                 <p className="mt-1 text-xs text-slate-300/80">
-                  Probability {(event.probability * 100).toFixed(2)}% · Miss Distance {event.missDistanceKm.toFixed(2)} km
+                  Miss Distance {event.missDistanceKm.toFixed(2)} km
                 </p>
                 <p className="mt-1 text-[11px] text-slate-400">
                   TCA {new Date(event.timeOfClosestApproachIso).toISOString()}

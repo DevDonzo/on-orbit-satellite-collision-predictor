@@ -42,8 +42,8 @@ export interface CollisionRisk {
   missDistanceKm: number;
   relativeVelocityKms: number;
   timeOfClosestApproachIso: string;
-  vectorStart: GeodeticPoint;
-  vectorEnd: GeodeticPoint;
+  vectorStart?: GeodeticPoint;
+  vectorEnd?: GeodeticPoint;
   riskZoneRadiusKm: number;
 }
 
@@ -57,7 +57,7 @@ export interface CollisionApiResponse {
   serverTimeIso: string;
 }
 
-export interface BackendSatelliteSummary {
+export interface BackendSatelliteDto {
   name: string;
   lat: number;
   lon: number;
@@ -65,13 +65,16 @@ export interface BackendSatelliteSummary {
   risk: "safe" | "warning" | "danger";
 }
 
-export interface BackendCollisionSummary {
+export interface BackendCollisionDto {
   satellite_1: string;
   satellite_2: string;
   distance_km: number;
   risk: "safe" | "warning" | "danger";
   timestamp: string;
 }
+
+export type BackendSatelliteSummary = BackendSatelliteDto;
+export type BackendCollisionSummary = BackendCollisionDto;
 
 export interface BackendPredictionSummary {
   satellite_1: string;

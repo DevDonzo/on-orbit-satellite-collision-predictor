@@ -1,7 +1,6 @@
 import type {
-  BackendCollisionSummary,
-  BackendPredictionSummary,
-  BackendSatelliteSummary,
+  BackendCollisionDto,
+  BackendSatelliteDto,
   CollisionRisk,
   OrbitData,
   RiskBand,
@@ -10,52 +9,96 @@ import type {
 import { HttpError, apiRequest } from "@/services/apiClient";
 import { mockCollisionEvents, mockSatellites } from "@/services/mockData";
 
-function normalizeRisk(risk: "safe" | "warning" | "danger"): RiskBand {
+const MAX_HISTORY_POINTS = 720;
+const DENSIFY_SUBDIVISIONS = 4;
+const telemetryHistoryBySatelliteId = new Map<string, TelemetrySample[]>();
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function mapBackendRiskToBand(risk: BackendSatelliteDto["risk"] | BackendCollisionDto["risk"]): RiskBand {
   if (risk === "danger") return "critical";
-  if (risk === "warning") return "high";
+  if (risk === "warning") return "moderate";
   return "low";
 }
 
-function defaultProbabilityFromRisk(riskBand: RiskBand): number {
-  if (riskBand === "critical") return 0.86;
-  if (riskBand === "high") return 0.64;
-  if (riskBand === "moderate") return 0.41;
-  return 0.12;
+function deriveProbabilityFromMissDistance(missDistanceKm: number): number {
+  if (missDistanceKm <= 0) return 1;
+  const score = 1 - missDistanceKm / 50;
+  return Number(clamp(score, 0, 1).toFixed(4));
 }
 
-function makeSyntheticOrbitTrack(lat: number, lon: number, altKm: number, steps = 36): TelemetrySample[] {
-  return Array.from({ length: steps }, (_, index) => {
-    const ratio = index / (steps - 1);
-    return {
-      timestampIso: new Date(Date.now() + index * 60_000).toISOString(),
-      latitudeDeg: lat + Math.sin(ratio * Math.PI * 2) * 4.2,
-      longitudeDeg: lon + ratio * 22.0,
-      altitudeKm: altKm + Math.cos(ratio * Math.PI * 2) * 2.8,
-      velocityKms: 7.3
-    };
-  });
+function appendTelemetrySample(satelliteId: string, sample: TelemetrySample): TelemetrySample[] {
+  const existing = telemetryHistoryBySatelliteId.get(satelliteId) ?? [];
+  const last = existing[existing.length - 1];
+  if (!last || last.timestampIso !== sample.timestampIso) {
+    existing.push(sample);
+  } else {
+    existing[existing.length - 1] = sample;
+  }
+  const trimmed = existing.slice(-MAX_HISTORY_POINTS);
+  telemetryHistoryBySatelliteId.set(satelliteId, trimmed);
+  return trimmed;
 }
 
-function mapSatelliteSummary(summary: BackendSatelliteSummary): OrbitData {
+function interpolateTelemetry(left: TelemetrySample, right: TelemetrySample, t: number): TelemetrySample {
   return {
-    id: summary.name,
-    name: summary.name,
+    timestampIso: new Date(
+      new Date(left.timestampIso).getTime() + (new Date(right.timestampIso).getTime() - new Date(left.timestampIso).getTime()) * t
+    ).toISOString(),
+    latitudeDeg: left.latitudeDeg + (right.latitudeDeg - left.latitudeDeg) * t,
+    longitudeDeg: left.longitudeDeg + (right.longitudeDeg - left.longitudeDeg) * t,
+    altitudeKm: left.altitudeKm + (right.altitudeKm - left.altitudeKm) * t,
+    velocityKms: left.velocityKms + (right.velocityKms - left.velocityKms) * t
+  };
+}
+
+function densifyTelemetry(track: TelemetrySample[]): TelemetrySample[] {
+  if (track.length < 2) return track;
+  const out: TelemetrySample[] = [];
+  for (let i = 0; i < track.length - 1; i += 1) {
+    const left = track[i];
+    const right = track[i + 1];
+    out.push(left);
+    for (let step = 1; step < DENSIFY_SUBDIVISIONS; step += 1) {
+      out.push(interpolateTelemetry(left, right, step / DENSIFY_SUBDIVISIONS));
+    }
+  }
+  out.push(track[track.length - 1]);
+  return out;
+}
+
+function backendSatelliteToOrbitData(dto: BackendSatelliteDto, sampleTimeIso: string): OrbitData {
+  const sample: TelemetrySample = {
+    timestampIso: sampleTimeIso,
+    latitudeDeg: Number(dto.lat),
+    longitudeDeg: Number(dto.lon),
+    altitudeKm: Number(dto.alt_km),
+    velocityKms: 7.67
+  };
+  const history = appendTelemetrySample(dto.name, sample);
+  const status: OrbitData["status"] = dto.risk === "danger" ? "maneuvering" : "active";
+  return {
+    id: dto.name,
+    name: dto.name,
     noradId: "N/A",
-    telemetry: makeSyntheticOrbitTrack(summary.lat, summary.lon, summary.alt_km),
-    status: "active",
-    updatedAtIso: new Date().toISOString()
+    status,
+    updatedAtIso: sampleTimeIso,
+    telemetry: densifyTelemetry(history)
   };
 }
 
 export async function fetchSatellites(): Promise<OrbitData[]> {
+  const sampledAtIso = new Date().toISOString();
   try {
-    const response = await apiRequest<BackendSatelliteSummary[]>("/satellites", {
+    const response = await apiRequest<BackendSatelliteDto[]>("/satellites", {
       method: "GET",
       requiresAuth: false
     });
-    return response.map(mapSatelliteSummary);
+    return response.map((satellite) => backendSatelliteToOrbitData(satellite, sampledAtIso));
   } catch (error) {
-    if (error instanceof HttpError && (error.status === 404 || error.status === 503)) {
+    if (process.env.NEXT_PUBLIC_ENABLE_SIMULATION_MOCKS === "true" && error instanceof HttpError) {
       return mockSatellites;
     }
     throw error;
@@ -64,67 +107,23 @@ export async function fetchSatellites(): Promise<OrbitData[]> {
 
 export async function fetchCollisionEvents(): Promise<CollisionRisk[]> {
   try {
-    const [collisions, predictions, satellites] = await Promise.all([
-      apiRequest<BackendCollisionSummary[]>("/collisions", {
-        method: "GET",
-        requiresAuth: false
-      }),
-      apiRequest<BackendPredictionSummary[]>("/predict", {
-        method: "GET",
-        requiresAuth: false
-      }).catch((error: unknown) => {
-        if (error instanceof HttpError && error.status === 503) {
-          return [];
-        }
-        throw error;
-      }),
-      apiRequest<BackendSatelliteSummary[]>("/satellites", {
-        method: "GET",
-        requiresAuth: false
-      })
-    ]);
-
-    const satelliteByName = new Map(satellites.map((satellite) => [satellite.name, satellite]));
-    const predictionByPair = new Map(
-      predictions.map((prediction) => [`${prediction.satellite_1}|${prediction.satellite_2}`, prediction] as const)
-    );
-
-    return collisions.map((collision, index) => {
-      const prediction =
-        predictionByPair.get(`${collision.satellite_1}|${collision.satellite_2}`) ??
-        predictionByPair.get(`${collision.satellite_2}|${collision.satellite_1}`);
-      const primary = satelliteByName.get(collision.satellite_1);
-      const secondary = satelliteByName.get(collision.satellite_2);
-      const fallbackLat = 0.0 + index;
-      const fallbackLon = 0.0 + index;
-
-      const riskBand = normalizeRisk(prediction?.predicted_risk ?? collision.risk);
-      const missDistance = prediction?.predicted_min_distance_km ?? collision.distance_km;
-
-      return {
-        id: `collision-${collision.satellite_1}-${collision.satellite_2}-${index}`,
-        primaryObjectId: collision.satellite_1,
-        secondaryObjectId: collision.satellite_2,
-        probability: defaultProbabilityFromRisk(riskBand),
-        riskBand,
-        missDistanceKm: missDistance,
-        relativeVelocityKms: 7.8,
-        timeOfClosestApproachIso: new Date(collision.timestamp).toISOString(),
-        vectorStart: {
-          latitudeDeg: primary?.lat ?? fallbackLat,
-          longitudeDeg: primary?.lon ?? fallbackLon,
-          altitudeKm: primary?.alt_km ?? 700
-        },
-        vectorEnd: {
-          latitudeDeg: secondary?.lat ?? fallbackLat + 0.4,
-          longitudeDeg: secondary?.lon ?? fallbackLon + 0.7,
-          altitudeKm: secondary?.alt_km ?? 702
-        },
-        riskZoneRadiusKm: Math.max(20, Math.min(120, missDistance * 7))
-      } satisfies CollisionRisk;
+    const response = await apiRequest<BackendCollisionDto[]>("/collisions", {
+      method: "GET",
+      requiresAuth: false
     });
+    return response.map((event) => ({
+      id: `${event.satellite_1}:${event.satellite_2}:${event.timestamp}`,
+      primaryObjectId: event.satellite_1,
+      secondaryObjectId: event.satellite_2,
+      probability: deriveProbabilityFromMissDistance(Number(event.distance_km)),
+      riskBand: mapBackendRiskToBand(event.risk),
+      missDistanceKm: Number(event.distance_km),
+      relativeVelocityKms: 0,
+      timeOfClosestApproachIso: new Date(event.timestamp).toISOString(),
+      riskZoneRadiusKm: clamp(Number(event.distance_km) * 0.5, 8, 75)
+    }));
   } catch (error) {
-    if (error instanceof HttpError && (error.status === 404 || error.status === 503)) {
+    if (process.env.NEXT_PUBLIC_ENABLE_SIMULATION_MOCKS === "true" && error instanceof HttpError) {
       return mockCollisionEvents;
     }
     throw error;

@@ -17,7 +17,9 @@ export default function CesiumViewer() {
   const selectedEntityId = useSimulationStore((state) => state.selectedEntityId);
   const setSelectedEntityId = useSimulationStore((state) => state.setSelectedEntityId);
   const currentTimeIso = useSimulationStore((state) => state.currentTimeIso);
-  const setCurrentTimeIso = useSimulationStore((state) => state.setCurrentTimeIso);
+  const isPlaying = useSimulationStore((state) => state.isPlaying);
+  const playbackRate = useSimulationStore((state) => state.playbackRate);
+  const advanceCurrentTimeMs = useSimulationStore((state) => state.advanceCurrentTimeMs);
   const setMetrics = useSimulationStore((state) => state.setMetrics);
 
   const satellites = useMemo(() => Object.values(satellitesMap), [satellitesMap]);
@@ -25,12 +27,13 @@ export default function CesiumViewer() {
   useSceneManager({
     viewer: viewerRef.current,
     satellites,
-    collisionEvents
+    collisionEvents,
+    currentTimeIso,
+    selectedEntityId
   });
 
   useEffect(() => {
     let cancelled = false;
-    let onTickDisposer: (() => void) | null = null;
     let postRenderDisposer: (() => void) | null = null;
 
     async function initializeViewer() {
@@ -50,31 +53,23 @@ export default function CesiumViewer() {
           fullscreenButton: false,
           infoBox: false,
           selectionIndicator: true,
-          shouldAnimate: true,
+          shouldAnimate: false,
           terrain: Cesium.Terrain.fromWorldTerrain()
         });
         viewerRef.current = viewer;
         viewer.scene.globe.enableLighting = true;
-        viewer.clock.multiplier = 60;
+        viewer.clock.multiplier = 1;
+        viewer.clock.shouldAnimate = false;
         setReadyState("ready");
 
-        let lastTickUpdate = 0;
-        const onTick = () => {
-          const now = performance.now();
-          if (now - lastTickUpdate < 250) return;
-          lastTickUpdate = now;
-          const iso = Cesium.JulianDate.toDate(viewer.clock.currentTime).toISOString();
-          setCurrentTimeIso(iso);
-        };
-        viewer.clock.onTick.addEventListener(onTick);
-        onTickDisposer = () => viewer.clock.onTick.removeEventListener(onTick);
-
         let lastFrameTime = performance.now();
+        let smoothedFps = 60;
         const postRender = () => {
           const frameNow = performance.now();
           const fps = 1000 / Math.max(1, frameNow - lastFrameTime);
           lastFrameTime = frameNow;
-          setMetrics({ fps });
+          smoothedFps = smoothedFps * 0.9 + fps * 0.1;
+          setMetrics({ fps: smoothedFps });
         };
         viewer.scene.postRender.addEventListener(postRender);
         postRenderDisposer = () => viewer.scene.postRender.removeEventListener(postRender);
@@ -94,12 +89,28 @@ export default function CesiumViewer() {
 
     return () => {
       cancelled = true;
-      onTickDisposer?.();
       postRenderDisposer?.();
       viewerRef.current?.destroy();
       viewerRef.current = null;
     };
-  }, [setCurrentTimeIso, setMetrics, setSelectedEntityId]);
+  }, [setMetrics, setSelectedEntityId]);
+
+  useEffect(() => {
+    let animationFrame = 0;
+    let lastNow = performance.now();
+
+    const tick = (now: number) => {
+      const deltaMs = now - lastNow;
+      lastNow = now;
+      if (isPlaying) {
+        advanceCurrentTimeMs(deltaMs * playbackRate);
+      }
+      animationFrame = window.requestAnimationFrame(tick);
+    };
+
+    animationFrame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [advanceCurrentTimeMs, isPlaying, playbackRate]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -117,7 +128,7 @@ export default function CesiumViewer() {
 
     const target = Cesium.JulianDate.fromDate(new Date(currentTimeIso));
     const delta = Math.abs(Cesium.JulianDate.secondsDifference(target, viewer.clock.currentTime));
-    if (delta > 0.5) {
+    if (delta > 0.001) {
       viewer.clock.currentTime = target;
     }
   }, [currentTimeIso]);

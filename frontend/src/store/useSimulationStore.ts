@@ -4,6 +4,8 @@ import type { ApiConnectionState, CollisionRisk, OrbitData, SystemMetrics } from
 
 interface SimulationState {
   currentTimeIso: string;
+  isPlaying: boolean;
+  playbackRate: number;
   satellites: Record<string, OrbitData>;
   collisionEvents: CollisionRisk[];
   selectedEntityId: string | null;
@@ -13,6 +15,9 @@ interface SimulationState {
 
 interface SimulationActions {
   setCurrentTimeIso: (timeIso: string) => void;
+  advanceCurrentTimeMs: (deltaMs: number) => void;
+  setIsPlaying: (isPlaying: boolean) => void;
+  setPlaybackRate: (rate: number) => void;
   upsertSatellites: (satellites: OrbitData[]) => void;
   setCollisionEvents: (events: CollisionRisk[]) => void;
   setSelectedEntityId: (entityId: string | null) => void;
@@ -25,6 +30,8 @@ type SimulationStore = SimulationState & SimulationActions;
 
 const defaultState: SimulationState = {
   currentTimeIso: new Date().toISOString(),
+  isPlaying: true,
+  playbackRate: 60,
   satellites: {},
   collisionEvents: [],
   selectedEntityId: null,
@@ -47,10 +54,32 @@ export const useSimulationStore = create<SimulationStore>()(
             false,
             "simulation/setCurrentTimeIso"
           ),
+        advanceCurrentTimeMs: (deltaMs) =>
+          set(
+            (state) => {
+              const currentMs = new Date(state.currentTimeIso).getTime();
+              const base = Number.isFinite(currentMs) ? currentMs : Date.now();
+              return { currentTimeIso: new Date(base + Math.max(0, deltaMs)).toISOString() };
+            },
+            false,
+            "simulation/advanceCurrentTimeMs"
+          ),
+        setIsPlaying: (isPlaying) =>
+          set(
+            () => ({ isPlaying }),
+            false,
+            "simulation/setIsPlaying"
+          ),
+        setPlaybackRate: (playbackRate) =>
+          set(
+            () => ({ playbackRate: Math.max(1, playbackRate) }),
+            false,
+            "simulation/setPlaybackRate"
+          ),
         upsertSatellites: (satellites) =>
           set(
             (state) => {
-              const merged = { ...state.satellites };
+              const merged: Record<string, OrbitData> = {};
               satellites.forEach((satellite) => {
                 merged[satellite.id] = satellite;
               });
