@@ -1,297 +1,251 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from itertools import combinations
-from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
+from skyfield.api import EarthSatellite, load, wgs84
 
-ORBITAL_NUMERIC_FIELDS = [
-    "eccentricity",
-    "inclination_deg",
-    "raan_deg",
-    "arg_perigee_deg",
-    "mean_anomaly_deg",
-    "mean_motion_rev_per_day",
-]
+import core.config as config
+from ml.schemas import CollisionEvent, SatellitePosition
 
-REQUIRED_RAW_COLUMNS = [
-    "a_eccentricity",
-    "a_inclination_deg",
-    "a_raan_deg",
-    "a_arg_perigee_deg",
-    "a_mean_anomaly_deg",
-    "a_mean_motion_rev_per_day",
-    "b_eccentricity",
-    "b_inclination_deg",
-    "b_raan_deg",
-    "b_arg_perigee_deg",
-    "b_mean_anomaly_deg",
-    "b_mean_motion_rev_per_day",
-]
-
-OPTIONAL_RAW_COLUMNS = ["closest_approach_km", "relative_velocity_kms"]
+_TS = load.timescale()
 
 
-def _parse_tle_exponent_field(raw: str) -> float | None:
-    cleaned = raw.strip()
-    if not cleaned:
-        return None
-    sign = -1.0 if cleaned[0] == "-" else 1.0
-    if cleaned[0] in "+-":
-        cleaned = cleaned[1:]
-    if len(cleaned) < 3:
-        return None
-    mantissa = float(f"0.{cleaned[:-2]}")
-    exponent = int(cleaned[-2:])
-    return sign * mantissa * (10**exponent)
+def _get_cfg_value(name: str, settings_name: str, default: float) -> float:
+    if hasattr(config, name):
+        return float(getattr(config, name))
+    if hasattr(config, "settings") and hasattr(config.settings, settings_name):
+        return float(getattr(config.settings, settings_name))
+    return float(default)
 
 
-def parse_tle_text(tle_text: str) -> pd.DataFrame:
-    """
-    Parse TLE line sets into numeric orbital parameters.
+def _time_step_seconds() -> int:
+    value = int(_get_cfg_value("TIME_STEP_SECONDS", "simulation_step_seconds", 300))
+    return max(1, value)
 
-    Supported patterns:
-    1. Two-line records (line1 + line2).
-    2. Three-line records (name + line1 + line2).
-    """
 
-    lines = [line.rstrip() for line in tle_text.splitlines() if line.strip()]
-    records: list[dict[str, Any]] = []
-    i = 0
+def _prediction_hours() -> int:
+    value = int(_get_cfg_value("PREDICTION_HOURS", "simulation_horizon_hours", 6))
+    return max(1, value)
 
-    while i < len(lines):
-        line = lines[i]
-        if line.startswith("1 "):
-            if i + 1 >= len(lines) or not lines[i + 1].startswith("2 "):
-                raise ValueError(f"Malformed TLE near line index {i}.")
-            line1 = lines[i]
-            line2 = lines[i + 1]
-            records.append(_parse_tle_record(line1=line1, line2=line2, object_name=None))
-            i += 2
+
+def _danger_distance_km() -> float:
+    return _get_cfg_value("DANGER_DISTANCE_KM", "danger_distance_km", 10.0)
+
+
+def _warning_distance_km() -> float:
+    return _get_cfg_value("WARNING_DISTANCE_KM", "warning_distance_km", 50.0)
+
+
+def _classify_risk(distance_km: float) -> str:
+    if distance_km < _danger_distance_km():
+        return "danger"
+    if distance_km < _warning_distance_km():
+        return "warning"
+    return "safe"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _build_satellites() -> list[EarthSatellite]:
+    sample_tles = getattr(config, "SAMPLE_TLES", [])
+    satellites: list[EarthSatellite] = []
+    for item in sample_tles:
+        try:
+            satellites.append(EarthSatellite(item["line1"], item["line2"], item["name"], _TS))
+        except Exception:
             continue
-
-        if i + 2 < len(lines) and lines[i + 1].startswith("1 ") and lines[i + 2].startswith("2 "):
-            records.append(
-                _parse_tle_record(
-                    line1=lines[i + 1],
-                    line2=lines[i + 2],
-                    object_name=lines[i].strip(),
-                )
-            )
-            i += 3
-            continue
-
-        i += 1
-
-    if not records:
-        raise ValueError("No valid TLE records found in payload.")
-    return pd.DataFrame.from_records(records)
+    return satellites
 
 
-def _verify_tle_checksum(line: str) -> None:
-    """
-    Validate NORAD TLE checksum when a checksum digit is present.
-
-    The checksum is the modulo-10 sum of all digits in columns 1-68, where '-'
-    contributes +1 and all other non-digit characters contribute +0.
-    """
-
-    if len(line) < 69 or not line[68].isdigit():
-        return
-    checksum = 0
-    for char in line[:68]:
-        if char.isdigit():
-            checksum += int(char)
-        elif char == "-":
-            checksum += 1
-    if checksum % 10 != int(line[68]):
-        raise ValueError(f"TLE checksum validation failed for line: {line}")
-
-
-def _parse_tle_record(line1: str, line2: str, object_name: str | None) -> dict[str, Any]:
-    if len(line1) < 61 or len(line2) < 63:
-        raise ValueError("TLE lines are too short to parse.")
-    if not line1.startswith("1 ") or not line2.startswith("2 "):
-        raise ValueError("TLE record must include line 1 and line 2 in order.")
-    _verify_tle_checksum(line1)
-    _verify_tle_checksum(line2)
-
-    sat_id_line1 = line1[2:7].strip()
-    sat_id_line2 = line2[2:7].strip()
-    if sat_id_line1 and sat_id_line2 and sat_id_line1 != sat_id_line2:
-        raise ValueError(f"TLE record satellite IDs do not match: {sat_id_line1} vs {sat_id_line2}.")
-
-    sat_id = sat_id_line1 or sat_id_line2
-    eccentricity_raw = line2[26:33].strip()
-    eccentricity = float(f"0.{eccentricity_raw}")
-    bstar = _parse_tle_exponent_field(line1[53:61])
-
+def _satellite_state(satellite: EarthSatellite, when: datetime) -> dict[str, Any]:
+    t = _TS.from_datetime(when)
+    geocentric = satellite.at(t)
+    subpoint = wgs84.subpoint(geocentric)
+    xyz = geocentric.position.km
+    velocity = geocentric.velocity.km_per_s
     return {
-        "object_id": object_name or sat_id or "unknown",
-        "eccentricity": eccentricity,
-        "inclination_deg": float(line2[8:16]),
-        "raan_deg": float(line2[17:25]),
-        "arg_perigee_deg": float(line2[34:42]),
-        "mean_anomaly_deg": float(line2[43:51]),
-        "mean_motion_rev_per_day": float(line2[52:63]),
-        "bstar": bstar,
+        "name": satellite.name,
+        "lat": float(subpoint.latitude.degrees),
+        "lon": float(subpoint.longitude.degrees),
+        "alt_km": float(subpoint.elevation.km),
+        "x_km": float(xyz[0]),
+        "y_km": float(xyz[1]),
+        "z_km": float(xyz[2]),
+        "vx_km_s": float(velocity[0]),
+        "vy_km_s": float(velocity[1]),
+        "vz_km_s": float(velocity[2]),
     }
 
 
-def cdm_records_to_pair_dataframe(records: Iterable[Mapping[str, Any]]) -> pd.DataFrame:
-    rows: list[dict[str, Any]] = []
-    for item in records:
-        object_a = item["object_a"]
-        object_b = item["object_b"]
-        row: dict[str, Any] = {}
-        for field in ORBITAL_NUMERIC_FIELDS:
-            row[f"a_{field}"] = object_a[field]
-            row[f"b_{field}"] = object_b[field]
-        row["closest_approach_km"] = item.get("closest_approach_km")
-        row["relative_velocity_kms"] = item.get("relative_velocity_kms")
-        if "collision_event" in item and item["collision_event"] is not None:
-            row["collision_event"] = int(item["collision_event"])
-        rows.append(row)
-    return pd.DataFrame.from_records(rows)
+def _distance_km(a: dict[str, Any], b: dict[str, Any]) -> float:
+    vec_a = np.array([a["x_km"], a["y_km"], a["z_km"]], dtype=float)
+    vec_b = np.array([b["x_km"], b["y_km"], b["z_km"]], dtype=float)
+    return float(max(0.0, np.linalg.norm(vec_a - vec_b)))
 
 
-def pair_adjacent_tle_objects(tle_df: pd.DataFrame) -> pd.DataFrame:
-    return pair_tle_objects(tle_df=tle_df, strategy="adjacent")
+def _future_times(start: datetime) -> list[datetime]:
+    step_seconds = _time_step_seconds()
+    total_seconds = _prediction_hours() * 3600
+    steps = max(1, int(total_seconds // step_seconds))
+    return [start + timedelta(seconds=i * step_seconds) for i in range(steps + 1)]
 
 
-def pair_tle_objects(
-    tle_df: pd.DataFrame,
-    strategy: str = "adjacent",
-    max_pairs: int = 50000,
-) -> pd.DataFrame:
-    """
-    Build pairwise conjunction candidates from parsed TLE objects.
+def build_current_satellite_positions() -> list[SatellitePosition]:
+    satellites = _build_satellites()
+    if not satellites:
+        return []
+    now = _utc_now()
+    states: list[dict[str, Any]] = []
+    for sat in satellites:
+        try:
+            state = _satellite_state(sat, now)
+            if all(np.isfinite([state["lat"], state["lon"], state["alt_km"], state["x_km"], state["y_km"], state["z_km"]])):
+                states.append(state)
+        except Exception:
+            continue
+    if not states:
+        return []
+    out: list[SatellitePosition] = []
 
-    Strategies:
-    - adjacent: consecutive records only (N-1 pairs).
-    - all_pairs: all unique combinations (N * (N-1) / 2), bounded by max_pairs.
-    """
-
-    if len(tle_df) < 2:
-        raise ValueError("At least two objects are required to build pairwise records.")
-
-    if strategy == "adjacent":
-        left = tle_df.iloc[:-1].reset_index(drop=True)
-        right = tle_df.iloc[1:].reset_index(drop=True)
-        out = pd.DataFrame(
-            {
-                "a_object_id": left["object_id"],
-                "b_object_id": right["object_id"],
-            }
-        )
-        for field in ORBITAL_NUMERIC_FIELDS:
-            out[f"a_{field}"] = left[field].to_numpy()
-            out[f"b_{field}"] = right[field].to_numpy()
-        out["closest_approach_km"] = np.nan
-        out["relative_velocity_kms"] = np.nan
-        return out
-
-    if strategy == "all_pairs":
-        total_possible = (len(tle_df) * (len(tle_df) - 1)) // 2
-        if total_possible > max_pairs:
-            raise ValueError(
-                f"all_pairs strategy would generate {total_possible} pairs; "
-                f"max_pairs is {max_pairs}. Reduce input size or use adjacent strategy."
+    for i, state_i in enumerate(states):
+        nearest = float("inf")
+        for j, state_j in enumerate(states):
+            if i == j:
+                continue
+            nearest = min(nearest, _distance_km(state_i, state_j))
+        if not np.isfinite(nearest):
+            nearest = float("inf")
+        out.append(
+            SatellitePosition(
+                name=state_i["name"],
+                lat=round(state_i["lat"], 6),
+                lon=round(state_i["lon"], 6),
+                alt_km=round(state_i["alt_km"], 3),
+                x_km=round(state_i["x_km"], 3),
+                y_km=round(state_i["y_km"], 3),
+                z_km=round(state_i["z_km"], 3),
+                risk=_classify_risk(nearest),
             )
-        rows: list[dict[str, Any]] = []
-        for i, j in combinations(range(len(tle_df)), 2):
-            left = tle_df.iloc[i]
-            right = tle_df.iloc[j]
-            row: dict[str, Any] = {
-                "a_object_id": left["object_id"],
-                "b_object_id": right["object_id"],
-            }
-            for field in ORBITAL_NUMERIC_FIELDS:
-                row[f"a_{field}"] = left[field]
-                row[f"b_{field}"] = right[field]
-            row["closest_approach_km"] = np.nan
-            row["relative_velocity_kms"] = np.nan
-            rows.append(row)
-        return pd.DataFrame.from_records(rows)
-
-    raise ValueError(f"Unsupported TLE pairing strategy: {strategy}")
+        )
+    return out
 
 
-def load_orbital_dataset(path: str | Path) -> pd.DataFrame:
-    file_path = Path(path)
-    suffix = file_path.suffix.lower()
-    if suffix == ".csv":
-        return pd.read_csv(file_path)
-    if suffix == ".json":
-        return pd.read_json(file_path)
-    if suffix == ".jsonl":
-        return pd.read_json(file_path, lines=True)
-    if suffix in {".tle", ".txt"}:
-        return parse_tle_text(file_path.read_text(encoding="utf-8"))
-    raise ValueError(f"Unsupported dataset extension: {suffix}")
+def compute_collision_candidates() -> list[CollisionEvent]:
+    satellites = _build_satellites()
+    if len(satellites) < 2:
+        return []
+    now = _utc_now()
+    future_times = _future_times(now)
+    output: list[CollisionEvent] = []
+
+    for sat_a, sat_b in combinations(satellites, 2):
+        try:
+            min_distance = float("inf")
+            min_time = now
+            current_a = _satellite_state(sat_a, now)
+            current_b = _satellite_state(sat_b, now)
+            current_distance = _distance_km(current_a, current_b)
+        except Exception:
+            continue
+
+        for step_time in future_times:
+            try:
+                state_a = _satellite_state(sat_a, step_time)
+                state_b = _satellite_state(sat_b, step_time)
+                distance = _distance_km(state_a, state_b)
+            except Exception:
+                continue
+            if distance < min_distance:
+                min_distance = distance
+                min_time = step_time
+
+        if not np.isfinite(min_distance):
+            continue
+
+        output.append(
+            CollisionEvent(
+                satellite_1=sat_a.name,
+                satellite_2=sat_b.name,
+                distance_km=round(min_distance, 3),
+                risk=_classify_risk(min_distance),
+                timestamp=min_time.isoformat().replace("+00:00", "Z"),
+                dx=round(current_b["x_km"] - current_a["x_km"], 6),
+                dy=round(current_b["y_km"] - current_a["y_km"], 6),
+                dz=round(current_b["z_km"] - current_a["z_km"], 6),
+                dvx=round(current_b["vx_km_s"] - current_a["vx_km_s"], 6),
+                dvy=round(current_b["vy_km_s"] - current_a["vy_km_s"], 6),
+                dvz=round(current_b["vz_km_s"] - current_a["vz_km_s"], 6),
+                current_distance_km=round(current_distance, 6),
+                altitude_diff_km=round(abs(current_b["alt_km"] - current_a["alt_km"]), 6),
+            )
+        )
+    return output
 
 
-def standardize_pair_dataset(df: pd.DataFrame, label_required: bool) -> pd.DataFrame:
-    """
-    Normalize CDM-like datasets into canonical training/inference columns.
+def build_predict_rows_from_collisions(collisions: list[CollisionEvent]) -> list[dict[str, float]]:
+    return [
+        {
+            "dx": event.dx,
+            "dy": event.dy,
+            "dz": event.dz,
+            "dvx": event.dvx,
+            "dvy": event.dvy,
+            "dvz": event.dvz,
+            "current_distance_km": event.current_distance_km,
+            "altitude_diff_km": event.altitude_diff_km,
+        }
+        for event in collisions
+    ]
 
-    Accepted source columns may include compact aliases such as `obj1_raan` and
-    canonical API columns such as `a_raan_deg`.
-    """
 
-    working = df.copy()
-    if {"object_a", "object_b"}.issubset(working.columns):
-        expanded_a = pd.json_normalize(working["object_a"]).add_prefix("object_a.")
-        expanded_b = pd.json_normalize(working["object_b"]).add_prefix("object_b.")
-        working = pd.concat([working.drop(columns=["object_a", "object_b"]), expanded_a, expanded_b], axis=1)
+def generate_training_dataframe(samples_per_pair: int = 12, offset_minutes: int = 10) -> pd.DataFrame:
+    satellites = _build_satellites()
+    if len(satellites) < 2:
+        return pd.DataFrame(
+            columns=[
+                "dx",
+                "dy",
+                "dz",
+                "dvx",
+                "dvy",
+                "dvz",
+                "current_distance_km",
+                "altitude_diff_km",
+                "label_min_distance_km",
+            ]
+        )
+    base_time = _utc_now()
+    rows: list[dict[str, float]] = []
 
-    alias_map: dict[str, list[str]] = {
-        "a_eccentricity": ["a_eccentricity", "obj1_eccentricity", "object_a.eccentricity"],
-        "a_inclination_deg": ["a_inclination_deg", "obj1_inclination_deg", "object_a.inclination_deg"],
-        "a_raan_deg": ["a_raan_deg", "obj1_raan_deg", "object_a.raan_deg"],
-        "a_arg_perigee_deg": ["a_arg_perigee_deg", "obj1_arg_perigee_deg", "object_a.arg_perigee_deg"],
-        "a_mean_anomaly_deg": ["a_mean_anomaly_deg", "obj1_mean_anomaly_deg", "object_a.mean_anomaly_deg"],
-        "a_mean_motion_rev_per_day": [
-            "a_mean_motion_rev_per_day",
-            "obj1_mean_motion_rev_per_day",
-            "object_a.mean_motion_rev_per_day",
-        ],
-        "b_eccentricity": ["b_eccentricity", "obj2_eccentricity", "object_b.eccentricity"],
-        "b_inclination_deg": ["b_inclination_deg", "obj2_inclination_deg", "object_b.inclination_deg"],
-        "b_raan_deg": ["b_raan_deg", "obj2_raan_deg", "object_b.raan_deg"],
-        "b_arg_perigee_deg": ["b_arg_perigee_deg", "obj2_arg_perigee_deg", "object_b.arg_perigee_deg"],
-        "b_mean_anomaly_deg": ["b_mean_anomaly_deg", "obj2_mean_anomaly_deg", "object_b.mean_anomaly_deg"],
-        "b_mean_motion_rev_per_day": [
-            "b_mean_motion_rev_per_day",
-            "obj2_mean_motion_rev_per_day",
-            "object_b.mean_motion_rev_per_day",
-        ],
-        "closest_approach_km": ["closest_approach_km", "miss_distance_km"],
-        "relative_velocity_kms": ["relative_velocity_kms", "relative_speed_kms"],
-    }
-    label_aliases = ["collision_event", "collision", "label", "is_collision"]
+    for sat_a, sat_b in combinations(satellites, 2):
+        for idx in range(samples_per_pair):
+            start_time = base_time + timedelta(minutes=idx * offset_minutes)
+            current_a = _satellite_state(sat_a, start_time)
+            current_b = _satellite_state(sat_b, start_time)
+            min_distance = float("inf")
 
-    normalized = pd.DataFrame(index=df.index)
-    for target in REQUIRED_RAW_COLUMNS + OPTIONAL_RAW_COLUMNS:
-        source_col = next((col for col in alias_map[target] if col in working.columns), None)
-        if source_col is None:
-            if target in REQUIRED_RAW_COLUMNS:
-                raise ValueError(f"Missing required feature column: {target}")
-            normalized[target] = np.nan
-        else:
-            normalized[target] = pd.to_numeric(working[source_col], errors="coerce")
+            for step_time in _future_times(start_time):
+                step_a = _satellite_state(sat_a, step_time)
+                step_b = _satellite_state(sat_b, step_time)
+                min_distance = min(min_distance, _distance_km(step_a, step_b))
 
-    label_col = next((col for col in label_aliases if col in working.columns), None)
-    if label_required and label_col is None:
-        raise ValueError("No label column found. Expected one of: collision_event, collision, label.")
-    if label_col:
-        normalized["collision_event"] = pd.to_numeric(working[label_col], errors="raise").astype(int)
-
-    if (normalized["a_mean_motion_rev_per_day"] <= 0).any() or (
-        normalized["b_mean_motion_rev_per_day"] <= 0
-    ).any():
-        raise ValueError("Mean motion values must be strictly positive.")
-
-    return normalized
+            rows.append(
+                {
+                    "dx": current_b["x_km"] - current_a["x_km"],
+                    "dy": current_b["y_km"] - current_a["y_km"],
+                    "dz": current_b["z_km"] - current_a["z_km"],
+                    "dvx": current_b["vx_km_s"] - current_a["vx_km_s"],
+                    "dvy": current_b["vy_km_s"] - current_a["vy_km_s"],
+                    "dvz": current_b["vz_km_s"] - current_a["vz_km_s"],
+                    "current_distance_km": _distance_km(current_a, current_b),
+                    "altitude_diff_km": abs(current_b["alt_km"] - current_a["alt_km"]),
+                    "label_min_distance_km": min_distance,
+                }
+            )
+    return pd.DataFrame(rows)
