@@ -28,7 +28,7 @@ function normalizeBody(body: ApiRequestOptions["body"]) {
 
 export async function apiRequest<TResponse>(
   endpoint: string,
-  { body, requiresAuth = true, headers, ...init }: ApiRequestOptions = {}
+  { body, requiresAuth = false, headers, ...init }: ApiRequestOptions = {}
 ): Promise<TResponse> {
   const token = getAuthToken();
   if (requiresAuth && !token) {

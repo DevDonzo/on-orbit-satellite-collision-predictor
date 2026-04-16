@@ -1,24 +1,14 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { CesiumWrapper } from "@/components/cesium/CesiumWrapper";
 import { CollisionAlerts } from "@/components/dashboard/CollisionAlerts";
 import { SystemStatus } from "@/components/dashboard/SystemStatus";
 import { TelemetryPanel } from "@/components/dashboard/TelemetryPanel";
 import { TimelineScrubber } from "@/components/dashboard/TimelineScrubber";
-import { getAuthToken } from "@/lib/auth";
 import { useSimulationPolling } from "@/hooks/useSimulationPolling";
 
 export default function MissionControlPage() {
-  const router = useRouter();
   useSimulationPolling();
-
-  useEffect(() => {
-    if (!getAuthToken()) {
-      router.replace("/login");
-    }
-  }, [router]);
 
   return (
     <main className="relative h-screen w-screen overflow-hidden">

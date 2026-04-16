@@ -57,6 +57,29 @@ export interface CollisionApiResponse {
   serverTimeIso: string;
 }
 
+export interface BackendSatelliteSummary {
+  name: string;
+  lat: number;
+  lon: number;
+  alt_km: number;
+  risk: "safe" | "warning" | "danger";
+}
+
+export interface BackendCollisionSummary {
+  satellite_1: string;
+  satellite_2: string;
+  distance_km: number;
+  risk: "safe" | "warning" | "danger";
+  timestamp: string;
+}
+
+export interface BackendPredictionSummary {
+  satellite_1: string;
+  satellite_2: string;
+  predicted_min_distance_km: number;
+  predicted_risk: "safe" | "warning" | "danger";
+}
+
 export interface AuthTokenResponse {
   access_token: string;
   token_type: "bearer";

@@ -86,13 +86,12 @@ export function useSceneManager({ viewer, satellites, collisionEvents }: SceneMa
       const zoneId = `collision-zone:${event.id}`;
       const boxId = `collision-box:${event.id}`;
       nextCollisionIds.add(lineId);
-      nextCollisionIds.add(zoneId);
-      nextCollisionIds.add(boxId);
 
       const start = toCartesian3(Cesium, event.vectorStart);
       const end = toCartesian3(Cesium, event.vectorEnd);
       const center = Cesium.Cartesian3.midpoint(start, end, new Cesium.Cartesian3());
       const color = colorForRisk(event.riskBand);
+      const shouldRenderVolumes = event.riskBand === "critical" || event.riskBand === "high";
 
       if (!viewer.entities.getById(lineId)) {
         viewer.entities.add({
@@ -113,7 +112,12 @@ export function useSceneManager({ viewer, satellites, collisionEvents }: SceneMa
         }
       }
 
-      if (!viewer.entities.getById(zoneId)) {
+      if (shouldRenderVolumes) {
+        nextCollisionIds.add(zoneId);
+        nextCollisionIds.add(boxId);
+      }
+
+      if (shouldRenderVolumes && !viewer.entities.getById(zoneId)) {
         viewer.entities.add({
           id: zoneId,
           position: center,
@@ -130,16 +134,13 @@ export function useSceneManager({ viewer, satellites, collisionEvents }: SceneMa
         });
       }
 
-      if (!viewer.entities.getById(boxId)) {
+      if (shouldRenderVolumes && !viewer.entities.getById(boxId)) {
+        const boxEdgeMeters = Math.max(4_000, Math.min(40_000, event.missDistanceKm * 250));
         viewer.entities.add({
           id: boxId,
           position: center,
           box: {
-            dimensions: new Cesium.Cartesian3(
-              event.missDistanceKm * 1400,
-              event.missDistanceKm * 1400,
-              event.missDistanceKm * 1400
-            ),
+            dimensions: new Cesium.Cartesian3(boxEdgeMeters, boxEdgeMeters, boxEdgeMeters),
             material: color.withAlpha(0.2),
             outline: true,
             outlineColor: color.withAlpha(0.8)
