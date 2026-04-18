@@ -1,6 +1,6 @@
 export type RiskBand = "low" | "moderate" | "high" | "critical";
 export type ApiConnectionState = "connecting" | "online" | "degraded" | "offline";
-export type MlPredictionSource = "selected-model" | "ensemble" | "heuristic-fallback";
+export type MlPredictionSource = "selected-model" | "ensemble" | "heuristic-fallback" | "ml-model";
 
 export interface GeodeticPoint {
   latitudeDeg: number;
@@ -146,8 +146,8 @@ export interface BackendMlStatus {
   source: MlPredictionSource;
   model_path: string;
   metadata: Record<string, unknown> | null;
-  candidate_models: string[];
-  selected_model: string | null;
+  candidate_models?: string[] | null;
+  selected_model?: string | null;
 }
 
 export interface AuthTokenResponse {

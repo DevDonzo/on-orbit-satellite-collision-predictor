@@ -13,14 +13,14 @@ async function buildImageryProvider(): Promise<Cesium.ImageryProvider> {
   const ionToken = getCesiumIonToken();
   const arcGisToken = getArcGisToken();
 
-  if (imageryMode === "cesium-ion") {
-    if (ionToken) {
+  if (imageryMode === "cesium-ion" && ionToken) {
+    try {
       Cesium.Ion.defaultAccessToken = ionToken;
-    }
-    if (Cesium.Ion.defaultAccessToken && Cesium.Ion.defaultAccessToken.length > 0) {
-      return Cesium.createWorldImageryAsync({
+      return await Cesium.createWorldImageryAsync({
         style: Cesium.IonWorldImageryStyle.AERIAL_WITH_LABELS
       });
+    } catch {
+      // Fall through to ArcGIS/OSM fallback if Ion token is invalid or blocked.
     }
   }
 
@@ -37,6 +37,33 @@ async function buildImageryProvider(): Promise<Cesium.ImageryProvider> {
 
   return new Cesium.OpenStreetMapImageryProvider({
     url: "https://tile.openstreetmap.org/"
+  });
+}
+
+async function buildImageryProviderWithTimeout(timeoutMs = 4500): Promise<Cesium.ImageryProvider | null> {
+  try {
+    return await Promise.race([
+      buildImageryProvider(),
+      new Promise<null>((resolve) => {
+        window.setTimeout(() => resolve(null), timeoutMs);
+      })
+    ]);
+  } catch {
+    return null;
+  }
+}
+
+function framePlanet(viewer: Cesium.Viewer) {
+  const earthRadius = Cesium.Ellipsoid.WGS84.maximumRadius;
+  const planetBounds = new Cesium.BoundingSphere(Cesium.Cartesian3.ZERO, earthRadius);
+
+  viewer.camera.flyToBoundingSphere(planetBounds, {
+    duration: 0,
+    offset: new Cesium.HeadingPitchRange(
+      Cesium.Math.toRadians(18),
+      Cesium.Math.toRadians(-62),
+      earthRadius * 3.1
+    )
   });
 }
 
@@ -76,12 +103,11 @@ export default function CesiumViewer() {
         }
         if (!containerRef.current || cancelled) return;
 
-        const imageryProvider = await buildImageryProvider();
         const ionToken = getCesiumIonToken();
-        const useIonTerrain = Boolean(ionToken && ionToken.length > 0);
+        const useIonTerrain = getGlobeImageryMode() === "cesium-ion" && Boolean(ionToken && ionToken.length > 0);
 
         const viewer = new Cesium.Viewer(containerRef.current, {
-          baseLayer: new Cesium.ImageryLayer(imageryProvider),
+          baseLayer: false,
           timeline: false,
           animation: false,
           geocoder: false,
@@ -104,6 +130,9 @@ export default function CesiumViewer() {
           terrainProvider: useIonTerrain ? undefined : new Cesium.EllipsoidTerrainProvider()
         });
         viewerRef.current = viewer;
+        viewer.scene.backgroundColor = Cesium.Color.fromCssColorString("#030711");
+        viewer.scene.globe.show = true;
+        viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#16314d");
         viewer.scene.globe.enableLighting = true;
         viewer.scene.globe.dynamicAtmosphereLighting = true;
         viewer.scene.globe.dynamicAtmosphereLightingFromSun = true;
@@ -124,16 +153,18 @@ export default function CesiumViewer() {
         viewer.scene.screenSpaceCameraController.inertiaTranslate = 0.88;
         viewer.scene.screenSpaceCameraController.inertiaSpin = 0.9;
         viewer.scene.screenSpaceCameraController.inertiaZoom = 0.85;
-        viewer.camera.setView({
-          destination: Cesium.Cartesian3.fromDegrees(-35.0, 26.0, 18_500_000),
-          orientation: {
-            heading: Cesium.Math.toRadians(16),
-            pitch: Cesium.Math.toRadians(-32),
-            roll: 0
-          }
-        });
+        framePlanet(viewer);
         viewer.clock.multiplier = 90;
         setReadyState("ready");
+
+        void (async () => {
+          const imageryProvider = await buildImageryProviderWithTimeout();
+          if (cancelled || !viewerRef.current || !imageryProvider) return;
+
+          viewer.imageryLayers.removeAll();
+          viewer.imageryLayers.addImageryProvider(imageryProvider);
+          viewer.scene.requestRender();
+        })();
 
         let lastTickUpdate = 0;
         const onTick = () => {

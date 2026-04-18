@@ -137,12 +137,19 @@ export async function fetchMlStatus(): Promise<MlRuntimeStatus | null> {
       method: "GET",
       requiresAuth: false
     });
+    const candidateModels = Array.isArray(status.candidate_models)
+      ? status.candidate_models.filter((model): model is string => typeof model === "string" && model.length > 0)
+      : [];
+    const selectedModel =
+      typeof status.selected_model === "string" && status.selected_model.length > 0
+        ? status.selected_model
+        : candidateModels[0] ?? null;
 
     return {
       available: status.available,
       source: status.source,
-      selectedModel: status.selected_model,
-      candidateModels: status.candidate_models,
+      selectedModel,
+      candidateModels,
       metadata: status.metadata
     };
   } catch (error) {

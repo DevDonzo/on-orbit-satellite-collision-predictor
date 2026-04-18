@@ -24,6 +24,10 @@ export function SystemStatus() {
 
   const selectedSatellite = selectedEntityId ? satellites[selectedEntityId] : null;
   const selectedCollision = collisionEvents.find((event) => event.id === selectedCollisionId) ?? collisionEvents[0] ?? null;
+  const candidateModelLabel =
+    mlStatus && Array.isArray(mlStatus.candidateModels) && mlStatus.candidateModels.length > 0
+      ? mlStatus.candidateModels.join(", ")
+      : "pending";
 
   return (
     <Card className="pointer-events-auto h-full">
@@ -71,7 +75,7 @@ export function SystemStatus() {
             </div>
             <div className="flex items-center justify-between">
               <span>Candidate set</span>
-              <span className="telemetry-value">{mlStatus?.candidateModels.join(", ") || "pending"}</span>
+              <span className="telemetry-value">{candidateModelLabel}</span>
             </div>
             <div className="flex items-center justify-between">
               <span>Propagation mode</span>

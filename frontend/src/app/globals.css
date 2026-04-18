@@ -86,6 +86,21 @@ body {
     @apply inline-flex items-center gap-2 rounded-sm border border-white/10 bg-[rgba(7,12,22,0.72)] px-3 py-2 text-sm text-slate-100;
   }
 
+  .hero-panel {
+    @apply rounded-sm border border-white/10 px-4 py-4 backdrop-blur-xl md:px-5 md:py-5;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.015)),
+      rgba(7, 12, 22, 0.54);
+    box-shadow:
+      0 24px 70px rgba(2, 7, 20, 0.46),
+      inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+
+  .hero-stat-row {
+    @apply flex items-center justify-between rounded-sm border border-white/10 px-4 py-3 text-sm text-slate-100;
+    background: rgba(7, 12, 22, 0.62);
+  }
+
   .metric-chip__label {
     @apply text-[10px] uppercase tracking-[0.18em];
     color: rgba(148, 163, 184, 0.82);
@@ -196,9 +211,23 @@ body {
   }
 }
 
+.cesium-viewer,
+.cesium-widget,
+.cesium-widget canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .mission-scan::before {
     animation: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .summary-tile__value {
+    font-size: 1rem;
   }
 }
 

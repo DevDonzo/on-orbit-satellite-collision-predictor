@@ -72,8 +72,8 @@ export const useSimulationStore = create<SimulationStore>()(
                 collisionEvents: snapshot.collisionEvents,
                 propagationMode: snapshot.propagationMode,
                 lastUpdatedIso: snapshot.generatedAtIso,
-                selectedEntityId: hasSelectedEntity ? state.selectedEntityId : snapshot.satellites[0]?.id ?? null,
-                selectedCollisionId: hasSelectedCollision ? state.selectedCollisionId : snapshot.collisionEvents[0]?.id ?? null,
+                selectedEntityId: hasSelectedEntity ? state.selectedEntityId : null,
+                selectedCollisionId: hasSelectedCollision ? state.selectedCollisionId : null,
                 metrics: {
                   ...state.metrics,
                   apiLatencyMs: snapshot.apiLatencyMs,
