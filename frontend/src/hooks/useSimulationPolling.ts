@@ -51,42 +51,67 @@ export function useSimulationPolling() {
   }, [mlStatusQuery.data, setMlStatus]);
 
   useEffect(() => {
-    if (snapshotQuery.isLoading || predictionsQuery.isLoading) {
+    const hasSnapshot = snapshotQuery.data !== undefined;
+    const isInitialLoad = !hasSnapshot && (snapshotQuery.isLoading || snapshotQuery.isFetching);
+    const hasPredictions = predictionsQuery.data !== undefined;
+    const hasMlStatus = mlStatusQuery.data !== undefined;
+
+    if (isInitialLoad) {
       setConnectionState("connecting");
       return;
     }
-    if (snapshotQuery.isError || predictionsQuery.isError) {
+
+    if (snapshotQuery.isError) {
       setConnectionState("offline");
       return;
     }
-    if (snapshotQuery.isFetching || predictionsQuery.isFetching || mlStatusQuery.isFetching) {
+
+    if (
+      predictionsQuery.isError ||
+      mlStatusQuery.isError ||
+      (predictionsQuery.isFetching && !hasPredictions) ||
+      (mlStatusQuery.isFetching && !hasMlStatus) ||
+      (snapshotQuery.isFetching && !hasSnapshot)
+    ) {
       setConnectionState("degraded");
       return;
     }
+
     setConnectionState("online");
   }, [
+    snapshotQuery.data,
     snapshotQuery.isLoading,
     snapshotQuery.isError,
     snapshotQuery.isFetching,
+    predictionsQuery.data,
     predictionsQuery.isLoading,
     predictionsQuery.isError,
     predictionsQuery.isFetching,
+    mlStatusQuery.data,
+    mlStatusQuery.isError,
     mlStatusQuery.isFetching,
     setConnectionState
   ]);
 
   useEffect(() => {
     const token = getAuthToken();
-    const url = new URL(buildWebSocketUrl("/ws/system-status"));
-    if (token) {
-      url.searchParams.set("token", token);
-    }
-
     let isMounted = true;
     let socket: WebSocket | null = null;
+    let endpoint = "";
 
     try {
-      socket = new WebSocket(url.toString());
+      const parsedUrl = new URL(buildWebSocketUrl("/ws/system-status"));
+      if (token) {
+        parsedUrl.searchParams.set("token", token);
+      }
+      endpoint = parsedUrl.toString();
+    } catch {
+      setMetrics({ wsConnected: false });
+      return;
+    }
+
+    try {
+      socket = new WebSocket(endpoint);
     } catch {
       setMetrics({ wsConnected: false });
       return;

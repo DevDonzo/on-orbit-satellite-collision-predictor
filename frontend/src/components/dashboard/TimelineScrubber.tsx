@@ -3,6 +3,8 @@
 import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { clamp } from "@/lib/math";
+import { formatIsoDateTime, parseIsoToMs } from "@/lib/time";
 import { useSimulationStore } from "@/store/useSimulationStore";
 
 const WINDOW_MS = 4 * 60 * 60 * 1000;
@@ -26,16 +28,33 @@ export function TimelineScrubber() {
       const now = Date.now();
       return [now - WINDOW_MS / 2, now + WINDOW_MS / 2];
     }
-    const eventTimes = collisionEvents.map((event) => new Date(event.timeOfClosestApproachIso).getTime());
+    const eventTimes = collisionEvents
+      .map((event) => parseIsoToMs(event.timeOfClosestApproachIso))
+      .filter((value): value is number => value !== null);
+    if (eventTimes.length === 0) {
+      const now = Date.now();
+      return [now - WINDOW_MS / 2, now + WINDOW_MS / 2];
+    }
     const min = Math.min(...eventTimes);
     const max = Math.max(...eventTimes);
     return [min - 45 * 60 * 1000, max + 45 * 60 * 1000];
   }, [collisionEvents]);
 
-  const currentMs = new Date(currentTimeIso).getTime();
-  const safeCurrentMs = Number.isFinite(currentMs) ? currentMs : startMs;
+  const currentMs = parseIsoToMs(currentTimeIso);
+  const safeCurrentMs = typeof currentMs === "number" && Number.isFinite(currentMs) ? currentMs : startMs;
   const timelineSpan = Math.max(1, endMs - startMs);
-  const nextEvents = collisionEvents.slice(0, 3);
+  const clampedCurrentMs = clamp(safeCurrentMs, startMs, endMs);
+  const nextEvents = useMemo(
+    () =>
+      [...collisionEvents]
+        .sort((left, right) => {
+          const leftMs = parseIsoToMs(left.timeOfClosestApproachIso) ?? Number.POSITIVE_INFINITY;
+          const rightMs = parseIsoToMs(right.timeOfClosestApproachIso) ?? Number.POSITIVE_INFINITY;
+          return leftMs - rightMs;
+        })
+        .slice(0, 3),
+    [collisionEvents]
+  );
 
   return (
     <Card className="pointer-events-auto">
@@ -70,14 +89,15 @@ export function TimelineScrubber() {
             min={startMs}
             max={endMs}
             step={30_000}
-            value={safeCurrentMs}
+            value={clampedCurrentMs}
             onChange={(event) => setCurrentTimeIso(new Date(Number(event.target.value)).toISOString())}
             className="timeline-range"
             aria-label="Simulation timeline scrubber"
           />
           <div className="pointer-events-none absolute left-0 right-0 top-0 h-4">
             {collisionEvents.map((event) => {
-              const eventMs = new Date(event.timeOfClosestApproachIso).getTime();
+              const eventMs = parseIsoToMs(event.timeOfClosestApproachIso);
+              if (eventMs === null) return null;
               const leftPct = ((eventMs - startMs) / timelineSpan) * 100;
               if (!Number.isFinite(leftPct) || leftPct < 0 || leftPct > 100) return null;
               return (
@@ -91,9 +111,9 @@ export function TimelineScrubber() {
           </div>
         </div>
         <div className="grid grid-cols-1 gap-2 text-xs text-slate-300/82 md:grid-cols-2">
-          <p className="telemetry-value">Simulation time: {new Date(safeCurrentMs).toISOString()}</p>
+          <p className="telemetry-value">Simulation time: {new Date(clampedCurrentMs).toISOString()}</p>
           <p className="telemetry-value text-left md:text-right">
-            Window: {new Date(startMs).toISOString()} → {new Date(endMs).toISOString()}
+            Window: {formatIsoDateTime(new Date(startMs).toISOString())} → {formatIsoDateTime(new Date(endMs).toISOString())}
           </p>
         </div>
       </CardContent>

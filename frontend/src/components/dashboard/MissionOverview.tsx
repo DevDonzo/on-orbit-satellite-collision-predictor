@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatIsoClock, formatIsoDateTime } from "@/lib/time";
 import { useSimulationStore } from "@/store/useSimulationStore";
 
 export function MissionOverview() {
@@ -46,7 +47,7 @@ export function MissionOverview() {
             </div>
             <div className="metric-chip">
               <span className="metric-chip__label">Generated</span>
-              <span className="telemetry-value">{lastUpdatedIso ? new Date(lastUpdatedIso).toISOString().slice(11, 19) : "--:--:--"}</span>
+              <span className="telemetry-value">{formatIsoClock(lastUpdatedIso)}</span>
             </div>
           </div>
         </div>
@@ -81,7 +82,7 @@ export function MissionOverview() {
                     </p>
                     <p className="mt-1 max-w-xl text-sm text-slate-300/82">
                       Predicted miss distance {leadEvent.missDistanceKm.toFixed(2)} km at{" "}
-                      {new Date(leadEvent.timeOfClosestApproachIso).toISOString()} with relative velocity{" "}
+                      {formatIsoDateTime(leadEvent.timeOfClosestApproachIso)} with relative velocity{" "}
                       {leadEvent.relativeVelocityKms.toFixed(2)} km/s.
                     </p>
                   </div>

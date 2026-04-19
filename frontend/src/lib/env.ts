@@ -1,11 +1,25 @@
 const API_OVERRIDE_STORAGE_KEY = "scp.api.base-url";
+const DEFAULT_API_BASE_URL = "http://localhost:8000";
+
+function normalizeBaseUrl(baseUrl: string | null | undefined): string | null {
+  const trimmed = (baseUrl ?? "").trim();
+  if (!trimmed) return null;
+
+  try {
+    return new URL(trimmed).toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
 
 export function getApiBaseUrl() {
-  const configured = process.env.NEXT_PUBLIC_BACKEND_API_URL ?? "http://localhost:8000";
+  const configured = normalizeBaseUrl(process.env.NEXT_PUBLIC_BACKEND_API_URL) ?? DEFAULT_API_BASE_URL;
   if (typeof window === "undefined") {
-    return configured.replace(/\/+$/, "");
+    return configured;
   }
-  return (localStorage.getItem(API_OVERRIDE_STORAGE_KEY) || configured).replace(/\/+$/, "");
+
+  const override = normalizeBaseUrl(localStorage.getItem(API_OVERRIDE_STORAGE_KEY));
+  return override ?? configured;
 }
 
 export function buildWebSocketUrl(pathname: string) {
@@ -18,7 +32,12 @@ export function buildWebSocketUrl(pathname: string) {
 
 export function setApiBaseUrl(baseUrl: string) {
   if (typeof window === "undefined") return;
-  localStorage.setItem(API_OVERRIDE_STORAGE_KEY, baseUrl.replace(/\/+$/, ""));
+  const normalized = normalizeBaseUrl(baseUrl);
+  if (!normalized) {
+    localStorage.removeItem(API_OVERRIDE_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(API_OVERRIDE_STORAGE_KEY, normalized);
 }
 
 export type GlobeImageryMode = "arcgis" | "cesium-ion" | "osm";

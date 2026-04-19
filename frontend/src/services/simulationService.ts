@@ -14,11 +14,24 @@ import type {
 import { HttpError, apiRequest } from "@/services/apiClient";
 import { mockCollisionEvents, mockSatellites } from "@/services/mockData";
 
+const RESILIENT_STATUS_CODES = new Set([401, 403, 404, 429, 500, 502, 503, 504]);
+
 function normalizeRisk(risk: "safe" | "warning" | "danger", score = 0): RiskBand {
   if (risk === "danger") return "critical";
   if (risk === "warning") return "high";
   if (score >= 0.35) return "moderate";
   return "low";
+}
+
+function latencySince(startedAt: number) {
+  return Math.max(1, Math.round(performance.now() - startedAt));
+}
+
+function canFallback(error: unknown) {
+  if (error instanceof HttpError) {
+    return RESILIENT_STATUS_CODES.has(error.status);
+  }
+  return error instanceof TypeError;
 }
 
 function mapTelemetry(sample: BackendSatelliteSummary["telemetry"][number]): TelemetrySample {
@@ -32,11 +45,24 @@ function mapTelemetry(sample: BackendSatelliteSummary["telemetry"][number]): Tel
 }
 
 function mapSatellite(summary: BackendSatelliteSummary): OrbitData {
+  const telemetry =
+    summary.telemetry.length > 0
+      ? summary.telemetry.map(mapTelemetry)
+      : [
+          {
+            timestampIso: summary.updated_at,
+            latitudeDeg: summary.lat,
+            longitudeDeg: summary.lon,
+            altitudeKm: summary.alt_km,
+            velocityKms: summary.velocity_km_s
+          }
+        ];
+
   return {
     id: summary.id,
     name: summary.name,
     noradId: summary.norad_id,
-    telemetry: summary.telemetry.map(mapTelemetry),
+    telemetry,
     status: summary.status,
     riskBand: normalizeRisk(summary.risk, summary.risk_score),
     riskScore: summary.risk_score,
@@ -77,33 +103,66 @@ function mapCollision(summary: BackendCollisionSummary): CollisionRisk {
   };
 }
 
+function buildMockSnapshot(startedAt: number): MissionSnapshot {
+  return {
+    generatedAtIso: new Date().toISOString(),
+    propagationMode: "mock",
+    satellites: mockSatellites,
+    collisionEvents: mockCollisionEvents,
+    apiLatencyMs: latencySince(startedAt)
+  };
+}
+
+async function fetchSnapshotFromDashboard(startedAt: number): Promise<MissionSnapshot> {
+  const response = await apiRequest<BackendDashboardSnapshot>("/dashboard", {
+    method: "GET",
+    requiresAuth: false
+  });
+
+  return {
+    generatedAtIso: response.generated_at,
+    propagationMode: response.propagation_mode,
+    satellites: response.satellites.map(mapSatellite),
+    collisionEvents: response.collisions.map(mapCollision),
+    apiLatencyMs: latencySince(startedAt)
+  };
+}
+
+async function fetchSnapshotFromSplitEndpoints(startedAt: number): Promise<MissionSnapshot> {
+  const [satellites, collisions] = await Promise.all([
+    apiRequest<BackendSatelliteSummary[]>("/satellites", {
+      method: "GET",
+      requiresAuth: false
+    }),
+    apiRequest<BackendCollisionSummary[]>("/collisions", {
+      method: "GET",
+      requiresAuth: false
+    })
+  ]);
+
+  return {
+    generatedAtIso: new Date().toISOString(),
+    propagationMode: "distributed",
+    satellites: satellites.map(mapSatellite),
+    collisionEvents: collisions.map(mapCollision),
+    apiLatencyMs: latencySince(startedAt)
+  };
+}
+
 export async function fetchMissionSnapshot(): Promise<MissionSnapshot> {
   const startedAt = performance.now();
 
   try {
-    const response = await apiRequest<BackendDashboardSnapshot>("/dashboard", {
-      method: "GET",
-      requiresAuth: false
-    });
-
-    return {
-      generatedAtIso: response.generated_at,
-      propagationMode: response.propagation_mode,
-      satellites: response.satellites.map(mapSatellite),
-      collisionEvents: response.collisions.map(mapCollision),
-      apiLatencyMs: Math.max(1, Math.round(performance.now() - startedAt))
-    };
-  } catch (error) {
-    if (error instanceof HttpError && (error.status === 404 || error.status === 503)) {
-      return {
-        generatedAtIso: new Date().toISOString(),
-        propagationMode: "mock",
-        satellites: mockSatellites,
-        collisionEvents: mockCollisionEvents,
-        apiLatencyMs: Math.max(1, Math.round(performance.now() - startedAt))
-      };
+    return await fetchSnapshotFromDashboard(startedAt);
+  } catch (dashboardError) {
+    try {
+      return await fetchSnapshotFromSplitEndpoints(startedAt);
+    } catch (splitError) {
+      if (canFallback(dashboardError) || canFallback(splitError)) {
+        return buildMockSnapshot(startedAt);
+      }
+      throw splitError;
     }
-    throw error;
   }
 }
 
@@ -124,7 +183,7 @@ export async function fetchPredictions() {
       modelName: prediction.model_name
     }));
   } catch (error) {
-    if (error instanceof HttpError && (error.status === 404 || error.status === 503 || error.status === 401)) {
+    if (canFallback(error)) {
       return [];
     }
     throw error;
@@ -153,7 +212,7 @@ export async function fetchMlStatus(): Promise<MlRuntimeStatus | null> {
       metadata: status.metadata
     };
   } catch (error) {
-    if (error instanceof HttpError && (error.status === 404 || error.status === 503 || error.status === 401)) {
+    if (canFallback(error)) {
       return null;
     }
     throw error;

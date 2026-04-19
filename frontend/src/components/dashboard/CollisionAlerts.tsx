@@ -5,6 +5,7 @@ import { AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { formatIsoDateTime } from "@/lib/time";
 import { useSimulationStore } from "@/store/useSimulationStore";
 import type { CollisionRisk, RiskBand } from "@/types";
 
@@ -103,7 +104,7 @@ export function CollisionAlerts() {
                         {event.primaryObjectId} vs {event.secondaryObjectId}
                       </p>
                       <p className="telemetry-value mt-1 text-[11px] text-slate-400">
-                        TCA {new Date(event.timeOfClosestApproachIso).toISOString()}
+                        TCA {formatIsoDateTime(event.timeOfClosestApproachIso)}
                       </p>
                     </div>
                     <Badge variant={event.riskBand}>{event.riskBand}</Badge>

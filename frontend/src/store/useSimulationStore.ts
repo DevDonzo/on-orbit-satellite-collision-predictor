@@ -66,14 +66,24 @@ export const useSimulationStore = create<SimulationStore>()(
               const hasSelectedCollision = snapshot.collisionEvents.some((event) => event.id === state.selectedCollisionId);
               const hasSelectedEntity =
                 state.selectedEntityId !== null && Object.prototype.hasOwnProperty.call(satellites, state.selectedEntityId);
+              const nextSelectedCollisionId = hasSelectedCollision ? state.selectedCollisionId : (snapshot.collisionEvents[0]?.id ?? null);
+              const collisionPrimary =
+                nextSelectedCollisionId !== null
+                  ? snapshot.collisionEvents.find((event) => event.id === nextSelectedCollisionId)?.primaryObjectId ?? null
+                  : null;
+              const nextSelectedEntityId = hasSelectedEntity
+                ? state.selectedEntityId
+                : collisionPrimary && Object.prototype.hasOwnProperty.call(satellites, collisionPrimary)
+                  ? collisionPrimary
+                  : (snapshot.satellites[0]?.id ?? null);
 
               return {
                 satellites,
                 collisionEvents: snapshot.collisionEvents,
                 propagationMode: snapshot.propagationMode,
                 lastUpdatedIso: snapshot.generatedAtIso,
-                selectedEntityId: hasSelectedEntity ? state.selectedEntityId : null,
-                selectedCollisionId: hasSelectedCollision ? state.selectedCollisionId : null,
+                selectedEntityId: nextSelectedEntityId,
+                selectedCollisionId: nextSelectedCollisionId,
                 metrics: {
                   ...state.metrics,
                   apiLatencyMs: snapshot.apiLatencyMs,
