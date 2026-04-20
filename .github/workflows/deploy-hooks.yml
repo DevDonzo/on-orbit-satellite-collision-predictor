@@ -1,0 +1,25 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy-frontend:
+    if: ${{ secrets.FRONTEND_DEPLOY_HOOK_URL != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger frontend deploy hook
+        env:
+          FRONTEND_DEPLOY_HOOK_URL: ${{ secrets.FRONTEND_DEPLOY_HOOK_URL }}
+        run: curl --fail --show-error --silent -X POST "$FRONTEND_DEPLOY_HOOK_URL"
+
+  deploy-backend:
+    if: ${{ secrets.BACKEND_DEPLOY_HOOK_URL != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger backend deploy hook
+        env:
+          BACKEND_DEPLOY_HOOK_URL: ${{ secrets.BACKEND_DEPLOY_HOOK_URL }}
+        run: curl --fail --show-error --silent -X POST "$BACKEND_DEPLOY_HOOK_URL"
