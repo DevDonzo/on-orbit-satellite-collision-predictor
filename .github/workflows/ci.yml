@@ -59,3 +59,45 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  backend-smoke:
+    name: Backend runtime smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Start API and run smoke checks
+        run: |
+          uvicorn api.main:app --host 127.0.0.1 --port 8001 >/tmp/backend-smoke.log 2>&1 &
+          API_PID=$!
+          trap "kill $API_PID" EXIT
+
+          for i in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:8001/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl --fail --silent http://127.0.0.1:8001/health >/dev/null
+          curl --fail --silent http://127.0.0.1:8001/dashboard >/dev/null
+          curl --fail --silent http://127.0.0.1:8001/satellites >/dev/null
+          curl --fail --silent http://127.0.0.1:8001/collisions >/dev/null
+          curl --fail --silent http://127.0.0.1:8001/predict >/dev/null
+          curl --fail --silent http://127.0.0.1:8001/ml/status >/dev/null
