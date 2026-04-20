@@ -1,0 +1,50 @@
+previews:
+  generation: automatic
+  expireAfterDays: 7
+
+services:
+  - type: web
+    name: scp-backend
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: backend
+    autoDeployTrigger: checksPass
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: SAT_ENVIRONMENT
+        value: production
+      - key: SAT_AUTH_REQUIRED
+        value: "false"
+      - key: SAT_JWT_SECRET
+        generateValue: true
+      - key: SAT_FRONTEND_ORIGINS
+        fromService:
+          type: web
+          name: scp-frontend
+          property: url
+
+  - type: web
+    name: scp-frontend
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: frontend
+    autoDeployTrigger: checksPass
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start -- -H 0.0.0.0 -p $PORT
+    healthCheckPath: /
+    envVars:
+      - key: NEXT_PUBLIC_BACKEND_API_URL
+        fromService:
+          type: web
+          name: scp-backend
+          property: url
+      - key: NEXT_PUBLIC_GLOBE_IMAGERY_MODE
+        value: arcgis
+      - key: NEXT_PUBLIC_ARCGIS_TOKEN
+        sync: false
+      - key: NEXT_PUBLIC_CESIUM_ION_TOKEN
+        sync: false

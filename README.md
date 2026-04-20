@@ -109,6 +109,48 @@ cd backend
 pytest
 ```
 
+## Team workflow + continuous deployment
+
+Use this workflow so production stays stable while both contributors ship changes quickly:
+
+1. Create a branch from `main` for each task (`feature/...`, `fix/...`).
+2. Open a pull request into `main`.
+3. Let GitHub Actions run CI (`.github/workflows/ci.yml`).
+4. Merge only when CI is green.
+5. Merges to `main` trigger deployment hooks (`.github/workflows/deploy-hooks.yml`).
+
+Recommended repository settings:
+
+- Protect `main` (Settings -> Branches): require pull requests and require status checks (`Frontend lint + build`, `Backend tests`).
+- Disable direct pushes to `main`.
+
+Deployment hook secrets expected by this repository:
+
+- `FRONTEND_DEPLOY_HOOK_URL` (Netlify/Vercel deploy hook URL)
+- `BACKEND_DEPLOY_HOOK_URL` (Render/Railway/Fly deploy hook URL)
+
+If a secret is not configured, that deploy job is skipped.
+
+## One-path live deployment (Render Blueprint)
+
+This repository now includes `render.yaml` so both apps can be launched together with managed previews and CI-gated auto deploys:
+
+- `scp-backend` (FastAPI) with `/health` checks
+- `scp-frontend` (Next.js) wired to backend URL automatically
+- PR previews enabled (`previews.generation: automatic`)
+- Deploy trigger mode set to `checksPass` (only deploy after CI passes)
+
+Render setup:
+
+1. In Render, create a new **Blueprint** and connect this GitHub repository.
+2. Select the repo root so Render reads `render.yaml`.
+3. Confirm any prompted secret values (optional imagery tokens).
+4. Deploy.
+
+After that, every merge to `main` updates live services automatically.
+
+For production safety, keep GitHub `main` protected with required checks and PR-only merges.
+
 ## Current frontend reliability guarantees
 
 - Resilient API pathing: snapshot uses `/dashboard` with automatic fallback to `/satellites` + `/collisions`.
