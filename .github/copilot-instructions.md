@@ -8,5 +8,5 @@ Non-negotiable:
 2. Work only on `feature/*` or `fix/*` branches.
 3. Run required checks before finishing.
 4. Open PR to `main`.
-5. Do not merge until required CI and approval are present.
+5. Do not merge until required CI checks are green. Once CI passes, you are authorized to merge autonomously.
 6. Keep changes scoped to the active task.

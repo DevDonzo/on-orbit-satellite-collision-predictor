@@ -12,7 +12,7 @@ This file defines strict contribution behavior for all AI agents working in this
    - Backend: `cd backend && pytest`
 5. Push only the feature/fix branch.
 6. Open a PR to `main`.
-7. Do not merge or bypass protections; wait for required CI and approval.
+7. Do not merge or bypass protections; wait for required CI checks to pass. Once CI is green, you are authorized to merge the PR autonomously.
 8. Keep changes scoped to the task; no unrelated edits.
 
 ## Required final output
